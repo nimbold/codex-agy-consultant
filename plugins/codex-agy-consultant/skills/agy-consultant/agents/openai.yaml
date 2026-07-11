@@ -4,4 +4,4 @@ interface:
   default_prompt: "Use $agy-consultant to challenge Codex scope before changing code."
 
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

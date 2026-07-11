@@ -45,6 +45,8 @@ def main() -> int:
         assert (launcher_dir / "codex-agy-consult").is_file()
         guidance = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
         assert "codex-agy-consultant:start" in guidance
+        assert "explicit opt-in second opinion" in guidance
+        assert "unless the user explicitly requests" in guidance
 
         refused = run("--codex-home", str(codex_home), "--launcher-dir", str(launcher_dir))
         assert refused.returncode != 0

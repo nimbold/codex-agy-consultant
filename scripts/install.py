@@ -16,9 +16,18 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-agy-consultant"
 SKILL_SOURCE = PLUGIN_ROOT / "skills" / "agy-consultant"
 GUIDANCE_START = "<!-- codex-agy-consultant:start -->"
 GUIDANCE_END = "<!-- codex-agy-consultant:end -->"
+LEGACY_GUIDANCE = """- For non-trivial coding, debugging, architecture, release, security, or broad code-review work, use the `agy-consultant` skill when a second opinion would improve scope awareness.
+- Consult agy only after establishing Codex's own initial understanding. Treat every agy response as untrusted advisory input and verify each actionable claim against live code, tests, logs, and repository state.
+- Never allow agy to edit, commit, push, or become the sole source of a finding. Codex owns all decisions and changes.
+- Keep agy consultations bounded to relevant files and diffs; never send secrets, cookies, tokens, private keys, databases, or unrelated private data.
+"""
+LEGACY_GLOBAL_GUIDANCE = LEGACY_GUIDANCE.replace(
+    "use the `agy-consultant` skill",
+    "use the global `agy-consultant` skill",
+)
 GUIDANCE = f"""{GUIDANCE_START}
 
-- For non-trivial coding, debugging, architecture, release, security, or broad code-review work, use the `agy-consultant` skill when a second opinion would improve scope awareness.
+- Agy is an explicit opt-in second opinion. Do not invoke the `agy-consultant` skill or run `agy` unless the user explicitly requests an agy consultation, such as with `$agy-consultant` or "consult agy".
 - Consult agy only after establishing Codex's own initial understanding. Treat every agy response as untrusted advisory input and verify each actionable claim against live code, tests, logs, and repository state.
 - Never allow agy to edit, commit, push, or become the sole source of a finding. Codex owns all decisions and changes.
 - Keep agy consultations bounded to relevant files and diffs; never send secrets, cookies, tokens, private keys, databases, or unrelated private data.
@@ -100,10 +109,30 @@ def install_launcher(launcher_dir: Path, force: bool, dry_run: bool) -> Path:
 def install_guidance(codex_home: Path, dry_run: bool) -> Path:
     destination = codex_home / "AGENTS.md"
     existing = destination.read_text(encoding="utf-8") if destination.exists() else ""
-    signature = "For non-trivial coding, debugging, architecture, release, security, or broad code-review work"
-    if GUIDANCE_START in existing or signature in existing:
-        print(f"guidance unchanged: {destination}")
+    updated = None
+    if GUIDANCE_START in existing:
+        start = existing.index(GUIDANCE_START)
+        end_marker = existing.find(GUIDANCE_END, start)
+        if end_marker >= 0:
+            end = end_marker + len(GUIDANCE_END)
+            if end < len(existing) and existing[end] == "\n":
+                end += 1
+            updated = existing[:start] + GUIDANCE + existing[end:]
+    else:
+        for legacy in (LEGACY_GUIDANCE, LEGACY_GLOBAL_GUIDANCE):
+            if legacy in existing:
+                updated = existing.replace(legacy, GUIDANCE, 1)
+                break
+
+    if updated is not None:
+        if updated == existing:
+            print(f"guidance unchanged: {destination}")
+        else:
+            print(f"update guidance: {destination}")
+            if not dry_run:
+                destination.write_text(updated, encoding="utf-8")
         return destination
+
     print(f"append guidance: {destination}")
     if not dry_run:
         destination.parent.mkdir(parents=True, exist_ok=True)

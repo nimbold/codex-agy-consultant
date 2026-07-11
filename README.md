@@ -40,6 +40,10 @@ Codex first forms its own understanding. The consultant then receives a bounded 
 
 The wrapper fails closed on oversized bundles, sensitive paths, out-of-repository paths, timeouts, empty output, and non-zero `agy` exits. It never silently truncates context and never edits, commits, or pushes.
 
+## Invocation policy
+
+The consultant is explicit-only by default. Installing or enabling the plugin makes the skill available, but does not run `agy` automatically. Ask Codex to use `$agy-consultant` or say "consult agy" when you want a second opinion. Codex still performs the complete investigation, implementation, review, and testing, and decides which advice to accept.
+
 ## Development
 
 Run the local checks from the repository root:

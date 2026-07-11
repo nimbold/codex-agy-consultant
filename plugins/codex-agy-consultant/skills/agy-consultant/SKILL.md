@@ -7,6 +7,8 @@ description: Use the installed Antigravity CLI (agy) as a read-only second-opini
 
 Use agy to challenge Codex's current understanding, not to replace Codex's reasoning or implementation work.
 
+This is an explicit opt-in skill. Do not invoke it implicitly; use it only when the user explicitly requests an agy consultation, such as with `$agy-consultant` or "consult agy".
+
 ## Operating contract
 
 - Codex remains the primary investigator, implementer, tester, and decision-maker.
