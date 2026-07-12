@@ -52,14 +52,20 @@ def resolve_home(path: Path | None) -> Path:
     return Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()
 
 
-def backup_existing(path: Path, force: bool, dry_run: bool) -> None:
+def backup_existing(path: Path, force: bool, dry_run: bool, backup_dir: Path | None = None) -> None:
     if not path.exists() and not path.is_symlink():
         return
     if not force:
         raise RuntimeError(f"destination already exists: {path}; rerun with --force to back it up and replace it")
-    backup = path.with_name(f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}")
+    if backup_dir is None:
+        backup = path.with_name(f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}")
+    else:
+        backup_dir = backup_dir.expanduser().resolve()
+        backup = backup_dir / f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}"
     print(f"backup: {path} -> {backup}")
     if not dry_run:
+        if backup_dir is not None:
+            backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(path), str(backup))
 
 
@@ -67,7 +73,7 @@ def install_skill(codex_home: Path, force: bool, dry_run: bool) -> Path:
     if not (SKILL_SOURCE / "SKILL.md").is_file():
         raise RuntimeError(f"plugin skill source is incomplete: {SKILL_SOURCE}")
     destination = codex_home / "skills" / "agy-consultant"
-    backup_existing(destination, force, dry_run)
+    backup_existing(destination, force, dry_run, backup_dir=codex_home / "skill-backups")
     print(f"install skill: {SKILL_SOURCE} -> {destination}")
     if not dry_run:
         destination.parent.mkdir(parents=True, exist_ok=True)

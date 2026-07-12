@@ -34,6 +34,8 @@ codex plugin add codex-agy-consultant@codex-agy
 
 Start a new Codex thread after installation so the skill is rediscovered. Automatic plugin installation does not install `agy` or authenticate a Google account.
 
+Choose one installation path per Codex home. The manual global skill and the marketplace plugin expose the same consultant; installing both can create duplicate autocomplete entries.
+
 ## How it works
 
 Codex first forms its own understanding. The consultant then receives a bounded task bundle containing selected files, safe repository status, and tracked diff. The wrapper invokes `agy` in an isolated accept-edits/sandbox session from an empty temporary directory; it never gives agy the repository path. Codex validates each advisory finding against the live repository before changing anything.

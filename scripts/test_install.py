@@ -58,7 +58,8 @@ def main() -> int:
             "--force",
         )
         assert replaced.returncode == 0, replaced.stderr
-        assert list((codex_home / "skills").glob("agy-consultant.backup-*"))
+        assert list((codex_home / "skill-backups").glob("agy-consultant.backup-*"))
+        assert not list((codex_home / "skills").glob("agy-consultant.backup-*"))
         assert list(launcher_dir.glob("codex-agy-consult.backup-*"))
 
     print("installer smoke test: ok")
