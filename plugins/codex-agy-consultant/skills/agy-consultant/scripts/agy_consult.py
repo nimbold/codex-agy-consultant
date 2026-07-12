@@ -14,6 +14,9 @@ from pathlib import Path
 
 DEFAULT_MAX_BYTES = 120_000
 DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_MODEL = "Gemini 3.5 Flash (High)"
+DEFAULT_PRINT_TIMEOUT = "120s"
+MAX_MODELS = 3
 SENSITIVE_NAMES = {
     ".env",
     ".env.local",
@@ -160,12 +163,54 @@ TRACKED DIFF:
     return payload
 
 
+def build_command(agy: str, args: argparse.Namespace, payload: str, model: str) -> list[str]:
+    command = [
+        agy,
+        "--mode",
+        "accept-edits",
+        "--sandbox",
+        "--model",
+        model,
+        "--print-timeout",
+        args.print_timeout,
+    ]
+    if args.agent:
+        command.extend(["--agent", args.agent])
+    command.extend(["--print", payload])
+    return command
+
+
+def resolve_models(args: argparse.Namespace) -> list[str]:
+    requested = args.models or [DEFAULT_MODEL]
+    models = []
+    for raw_model in requested:
+        model = raw_model.strip()
+        if not model:
+            raise ValueError("--model values must not be empty")
+        if model not in models:
+            models.append(model)
+    if len(models) > MAX_MODELS:
+        raise ValueError(f"use at most {MAX_MODELS} models per consultation")
+    return models
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prompt", nargs="?", help="task context; stdin is used when omitted")
     parser.add_argument("--phase", choices=("plan", "diff"), default="diff")
     parser.add_argument("--path", action="append", default=[], help="relevant repository file to include; repeatable")
-    parser.add_argument("--agent", help="optional agy agent override")
+    parser.add_argument("--agent", help="optional agy agent-script override; use --model for model selection")
+    parser.add_argument(
+        "--model",
+        dest="models",
+        action="append",
+        help=f"agy model label; repeat for independent opinions (default: {DEFAULT_MODEL}; max: {MAX_MODELS})",
+    )
+    parser.add_argument(
+        "--print-timeout",
+        default=DEFAULT_PRINT_TIMEOUT,
+        help=f"agy print-mode timeout duration (default: {DEFAULT_PRINT_TIMEOUT})",
+    )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     return parser.parse_args()
@@ -175,6 +220,10 @@ def main() -> int:
     args = parse_args()
     if args.max_bytes <= 0 or args.timeout <= 0:
         return fail("--max-bytes and --timeout must be positive")
+    try:
+        models = resolve_models(args)
+    except ValueError as exc:
+        return fail(str(exc))
     task = args.prompt if args.prompt is not None else sys.stdin.read()
     if not task.strip():
         return fail("provide a consultation task as the positional prompt or on stdin")
@@ -189,38 +238,62 @@ def main() -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         return fail(str(exc))
 
-    command = [agy, "--mode", "plan", "--sandbox"]
-    if args.agent:
-        command.extend(["--agent", args.agent])
-    command.extend(["--print", payload])
+    responses = []
+    unavailable = []
+    for model in models:
+        command = build_command(agy, args, payload, model)
+        try:
+            with tempfile.TemporaryDirectory(prefix="codex-agy-consult-") as isolated_cwd:
+                result = subprocess.run(
+                    command,
+                    cwd=isolated_cwd,
+                    text=True,
+                    capture_output=True,
+                    timeout=args.timeout,
+                    check=False,
+                    env=os.environ.copy(),
+                )
+        except subprocess.TimeoutExpired:
+            unavailable.append(f"{model}: timed out after {args.timeout} seconds")
+            continue
+        except OSError as exc:
+            unavailable.append(f"{model}: could not start agy: {exc}")
+            continue
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="codex-agy-consult-") as isolated_cwd:
-            result = subprocess.run(
-                command,
-                cwd=isolated_cwd,
-                text=True,
-                capture_output=True,
-                timeout=args.timeout,
-                check=False,
-                env=os.environ.copy(),
-            )
-    except subprocess.TimeoutExpired:
-        return fail(f"agy timed out after {args.timeout} seconds", 124)
-    except OSError as exc:
-        return fail(f"could not start agy: {exc}", 127)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or "agy returned no diagnostic"
+            unavailable.append(f"{model}: exited with status {result.returncode}: {detail}")
+            continue
+        if not result.stdout.strip():
+            detail = result.stderr.strip()
+            suffix = f" Diagnostic: {detail}" if detail else ""
+            unavailable.append(f"{model}: returned an empty consultation response.{suffix}")
+            continue
+        responses.append((model, result.stdout, result.stderr.strip()))
 
-    if result.returncode != 0:
-        detail = result.stderr.strip() or "agy returned no diagnostic"
-        return fail(f"agy exited with status {result.returncode}: {detail}", result.returncode or 1)
-    if not result.stdout.strip():
-        detail = result.stderr.strip()
-        suffix = f" Diagnostic: {detail}" if detail else ""
-        return fail(f"agy returned an empty consultation response.{suffix}", 4)
+    if not responses:
+        detail = "; ".join(unavailable) or "no response"
+        return fail(f"all agy consultations unavailable: {detail}", 4)
 
-    sys.stdout.write(result.stdout)
-    if result.stderr.strip():
-        print(result.stderr.strip(), file=sys.stderr)
+    if len(responses) == 1:
+        _, stdout, stderr = responses[0]
+        sys.stdout.write(stdout)
+        if stderr:
+            print(stderr, file=sys.stderr)
+    else:
+        for model, stdout, stderr in responses:
+            print(f"=== agy consultation: {model} ===")
+            sys.stdout.write(stdout)
+            if not stdout.endswith("\n"):
+                print()
+            if stderr:
+                print(f"[{model}] {stderr}", file=sys.stderr)
+
+    if unavailable:
+        print(
+            "codex-agy-consult: unavailable model(s): " + "; ".join(unavailable),
+            file=sys.stderr,
+        )
     return 0
 
 

@@ -36,9 +36,23 @@ Start a new Codex thread after installation so the skill is rediscovered. Automa
 
 ## How it works
 
-Codex first forms its own understanding. The consultant then receives a bounded task bundle containing selected files, safe repository status, and tracked diff. The wrapper invokes `agy` in plan/sandbox mode from an empty temporary directory. Codex validates each advisory finding against the live repository before changing anything.
+Codex first forms its own understanding. The consultant then receives a bounded task bundle containing selected files, safe repository status, and tracked diff. The wrapper invokes `agy` in an isolated accept-edits/sandbox session from an empty temporary directory; it never gives agy the repository path. Codex validates each advisory finding against the live repository before changing anything.
 
 The wrapper fails closed on oversized bundles, sensitive paths, out-of-repository paths, timeouts, empty output, and non-zero `agy` exits. It never silently truncates context and never edits, commits, or pushes.
+
+The wrapper uses `Gemini 3.5 Flash (High)` and a `120s` agy print-mode deadline by default, independent of the interactive model selected in the local agy settings. Repeat `--model` to request up to three independent, sequential opinions; for example:
+
+```sh
+codex-agy-consult \
+  --model "Gemini 3.5 Flash (High)" \
+  --model "Gemini 3.1 Pro (High)" \
+  --phase diff \
+  "Review the current diff and report independent material risks."
+```
+
+Each model receives the same bounded bundle and its output is labeled separately. Codex compares and validates the opinions; the wrapper does not ask agy to synthesize a final decision. Override `--print-timeout` when a different latency tradeoff is intentional.
+
+Models run sequentially to avoid a burst of simultaneous requests. If one model times out or fails, successful responses are still returned and the unavailable model is reported; if all requested models fail, the consultation is inconclusive.
 
 ## Invocation policy
 

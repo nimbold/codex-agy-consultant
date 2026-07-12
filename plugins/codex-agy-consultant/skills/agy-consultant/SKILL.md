@@ -17,6 +17,8 @@ This is an explicit opt-in skill. Do not invoke it implicitly; use it only when 
 - Never ask agy to edit the working tree, commit, push, or make the final decision.
 - Never copy an agy patch blindly. Translate accepted advice into a Codex-owned change.
 - Keep the consultation bounded to the task, relevant files, and diff. Do not send secrets, cookies, tokens, `.env` files, private keys, databases, or unrelated personal data.
+- The wrapper defaults to `Gemini 3.5 Flash (High)` with a 120-second agy print deadline. Repeat `--model` for up to three independent, sequential opinions; use `--print-timeout` when a different latency tradeoff is intentional.
+- For example, `--model "Gemini 3.5 Flash (High)" --model "Gemini 3.1 Pro (High)"` returns separately labeled opinions for Codex to compare; it does not ask agy to synthesize a decision.
 
 ## When to consult
 
@@ -53,7 +55,7 @@ This is an explicit opt-in skill. Do not invoke it implicitly; use it only when 
 
 ## Safety and failure handling
 
-- The wrapper invokes `agy` from an empty temporary working directory with `--mode plan --sandbox`; it does not grant agy the repository path.
+- The wrapper invokes `agy` from an empty temporary working directory with `--mode accept-edits --sandbox`; the sandbox and missing repository path keep any tool activity isolated from the real worktree.
 - Do not add `--dangerously-skip-permissions` or `--add-dir` to the consultation command.
 - An empty response, non-zero exit, timeout, or oversized bundle is an unavailable/inconclusive consultation, not evidence.
 - Do not silently truncate prompts or diffs. Narrow the selected paths and retry.
