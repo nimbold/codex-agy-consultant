@@ -29,14 +29,17 @@ def main() -> int:
         print_timeout=module.DEFAULT_PRINT_TIMEOUT,
         agent=None,
     )
-    assert module.resolve_models(args) == ["Gemini 3.5 Flash (High)"]
-    assert module.build_command("/usr/local/bin/agy", args, "payload", "Gemini 3.5 Flash (High)") == [
+    assert module.resolve_models(args) == [
+        "Gemini 3.1 Pro (High)",
+        "Gemini 3.5 Flash (High)",
+    ]
+    assert module.build_command("/usr/local/bin/agy", args, "payload", "Gemini 3.1 Pro (High)") == [
         "/usr/local/bin/agy",
         "--mode",
         "plan",
         "--sandbox",
         "--model",
-        "Gemini 3.5 Flash (High)",
+        "Gemini 3.1 Pro (High)",
         "--print-timeout",
         "120s",
         "--print",
@@ -45,6 +48,25 @@ def main() -> int:
 
     args.models = ["Gemini 3.5 Flash (High)", "Gemini 3.1 Pro (High)"]
     assert module.resolve_models(args) == args.models
+
+    compact = module.compact_report(
+        """
+        REPORT: One material compatibility risk.
+        FINDING: HIGH | FACT | src/main.rs:12 | Input is accepted without validation. | Invalid state reaches the parser. | Normal input is unaffected; malformed input can crash the process. | High | Add a negative test and validate before parsing.
+        FINDING: LOW | HYPOTHESIS | src/ui.tsx:44 | The label may not update after reload. | Users may see stale state. | Normal reload may show old data; worst case is misleading UI. | Medium | Exercise reload and inspect the rendered value.
+        FINDING: MEDIUM | FACT | src/db.rs:9 | A lock is held across an await. | Requests can queue behind slow I/O. | Normal traffic is fine; worst case is contention. | High | Measure under concurrent requests.
+        FINDING: LOW | FACT | README.md:4 | Documentation omits the fallback. | Operators may misconfigure it. | Normal setup needs clarification; worst case is failed startup. | High | Add a setup test.
+        FINDING: LOW | FACT | ignored.rs:1 | This fifth finding must be omitted. | No material impact. | None. | Low | No action.
+        UNCERTAINTY: The supplied context does not establish production traffic volume.
+        """,
+    )
+    assert compact.count("FINDING:") == 4
+    assert "REPORT: One material compatibility risk." in compact
+    assert "ignored.rs" not in compact
+    assert "UNCERTAINTY:" in compact
+
+    fallback = module.compact_report("A long unstructured report\nwith extra whitespace.")
+    assert fallback.startswith("UNSTRUCTURED_REPORT:")
 
     args.agent = "custom-agent"
     command = module.build_command("agy", args, "payload", args.models[0])

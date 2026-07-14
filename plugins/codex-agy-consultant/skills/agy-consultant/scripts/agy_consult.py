@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,9 +18,11 @@ DEFAULT_MAX_BYTES = 80_000
 DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_RETRIES = 1
 RETRY_DELAY_SECONDS = 2.0
-DEFAULT_MODEL = "Gemini 3.5 Flash (High)"
+DEFAULT_MODELS = ("Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (High)")
 DEFAULT_PRINT_TIMEOUT = "120s"
-MAX_MODELS = 3
+MAX_MODELS = 2
+MAX_FINDINGS = 4
+MAX_REPORT_CHARS = 6_000
 SENSITIVE_NAMES = {
     ".env",
     ".env.local",
@@ -159,7 +162,11 @@ Consultation phase: {phase}
 
 Codex remains responsible for repository inspection, reasoning, edits, tests, and the final decision. Review only the task, repository status, selected files, and diff supplied below. Do not edit files, run commands, or claim to have inspected files, commits, logs, or tools that are not included. If the context is insufficient for a claim, write INSUFFICIENT_CONTEXT instead of guessing.
 
-Return concise, evidence-based findings. For every finding include: severity, file/line or symbol, concrete evidence from the supplied context, impact, normal/worst-case scenario, confidence, and the next verification step. Separate observed facts from hypotheses. Do not produce an implementation patch unless Codex explicitly asks for one.
+Return one compact report only. Do not restate the task, files, or your reasoning. Use exactly these line formats:
+REPORT: <one-sentence overall conclusion>
+FINDING: <severity> | <FACT or HYPOTHESIS> | <file/line or symbol> | <concrete evidence> | <impact> | <normal/worst-case scenario> | <confidence> | <next verification step>
+UNCERTAINTY: <one sentence, only when needed>
+If there are no actionable findings, return NO_ACTIONABLE_FINDINGS instead of inventing one. Use at most four FINDING lines, keep each line under 600 characters, and keep the complete response under 2,500 characters. Do not produce an implementation patch unless Codex explicitly asks for one.
 
 TASK FROM CODEX:
 {task.strip()}
@@ -207,7 +214,7 @@ def build_command(agy: str, args: argparse.Namespace, payload: str, model: str) 
 
 
 def resolve_models(args: argparse.Namespace) -> list[str]:
-    requested = args.models or [DEFAULT_MODEL]
+    requested = args.models or list(DEFAULT_MODELS)
     models = []
     for raw_model in requested:
         model = raw_model.strip()
@@ -230,7 +237,7 @@ def parse_args() -> argparse.Namespace:
         "--model",
         dest="models",
         action="append",
-        help=f"agy model label; repeat for independent opinions (default: {DEFAULT_MODEL}; max: {MAX_MODELS})",
+        help=f"agy model label; repeat for independent opinions (default: {', '.join(DEFAULT_MODELS)}; max: {MAX_MODELS})",
     )
     parser.add_argument(
         "--print-timeout",
@@ -253,6 +260,36 @@ def compact_diagnostic(stderr: str, limit: int = 2_000) -> str:
     if len(detail) <= limit:
         return detail
     return "..." + detail[-limit:]
+
+
+def compact_report(text: str, max_findings: int = MAX_FINDINGS, max_chars: int = MAX_REPORT_CHARS) -> str:
+    """Keep only the bounded report contract that Codex needs to review."""
+    lines = []
+    for raw_line in text.replace("\r\n", "\n").splitlines():
+        line = re.sub(r"^\s*[-*]\s+", "", raw_line.strip().strip("`")).strip()
+        if line:
+            lines.append(re.sub(r"\s+", " ", line))
+
+    structured = []
+    findings = 0
+    for line in lines:
+        upper = line.upper()
+        if upper.startswith("FINDING:"):
+            if findings < max_findings:
+                structured.append(line)
+                findings += 1
+        elif upper.startswith(("REPORT:", "UNCERTAINTY:", "NO_ACTIONABLE_FINDINGS")):
+            structured.append(line)
+
+    if structured:
+        report = "\n".join(structured)
+    else:
+        report = "UNSTRUCTURED_REPORT: " + " ".join(lines)
+
+    if len(report) <= max_chars:
+        return report
+    marker = "\n[report clipped by wrapper; verify omitted detail against supplied context]"
+    return report[: max_chars - len(marker)].rstrip() + marker
 
 
 def main() -> int:
@@ -315,7 +352,7 @@ def main() -> int:
                     suffix = f" Diagnostic: {detail}" if detail else ""
                     model_failure = f"returned an empty consultation response.{suffix}"
                 else:
-                    responses.append((model, result.stdout, compact_diagnostic(result.stderr)))
+                    responses.append((model, compact_report(result.stdout), compact_diagnostic(result.stderr)))
                     model_failure = None
                     break
 

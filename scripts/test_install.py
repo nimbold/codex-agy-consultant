@@ -48,6 +48,8 @@ def main() -> int:
         assert "retry once" in installed_skill
         assert "80,000-byte bundle limit" in installed_skill
         assert "temporary workspace containing only the supplied context files" in installed_skill
+        assert "two independent" in installed_skill
+        assert "compact report" in installed_skill
         guidance = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
         assert "codex-agy-consultant:start" in guidance
         assert "explicit opt-in second opinion" in guidance

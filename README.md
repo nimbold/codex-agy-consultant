@@ -42,17 +42,17 @@ Codex first forms its own understanding. The consultant then receives a bounded 
 
 The wrapper fails closed on oversized bundles, sensitive paths, out-of-repository paths, timeouts, empty output, and non-zero `agy` exits. Plan consultations omit the tracked diff and run agy in read-only plan mode. Agy receives only the supplied context files in its isolated temporary workspace, and one transient failure retry is performed within the overall timeout. It never silently truncates context and never edits, commits, or pushes.
 
-The wrapper uses `Gemini 3.5 Flash (High)`, an `80,000`-byte bundle limit, one retry, and a `120s` agy print-mode deadline by default, independent of the interactive model selected in the local agy settings. Repeat `--model` to request up to three independent, sequential opinions; for example:
+The wrapper uses two independent sequential passes—`Gemini 3.1 Pro (High)` and `Gemini 3.5 Flash (High)`—an `80,000`-byte bundle limit, one retry per model, and a `120s` agy print-mode deadline by default, independent of the interactive model selected in the local agy settings. Use `--model` to select one or two models; for example:
 
 ```sh
 codex-agy-consult \
-  --model "Gemini 3.5 Flash (High)" \
   --model "Gemini 3.1 Pro (High)" \
+  --model "Gemini 3.5 Flash (High)" \
   --phase diff \
   "Review the current diff and report independent material risks."
 ```
 
-Each model receives the same bounded bundle and its output is labeled separately. Codex compares and validates the opinions; the wrapper does not ask agy to synthesize a final decision. Override `--print-timeout` when a different latency tradeoff is intentional.
+Each model receives the same bounded bundle and its output is labeled separately. Agy must return a compact line-based report with at most four findings; the wrapper removes unstructured narration and caps the report before returning it to Codex. Codex compares and validates the opinions; the wrapper does not ask agy to synthesize a final decision. Override `--print-timeout` when a different latency tradeoff is intentional.
 
 Models run sequentially to avoid a burst of simultaneous requests. If one model times out or fails, successful responses are still returned and the unavailable model is reported; if all requested models fail, the consultation is inconclusive.
 

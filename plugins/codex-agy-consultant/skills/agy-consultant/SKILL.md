@@ -17,8 +17,8 @@ This is an explicit opt-in skill. Do not invoke it implicitly; use it only when 
 - Never ask agy to edit the working tree, commit, push, or make the final decision.
 - Never copy an agy patch blindly. Translate accepted advice into a Codex-owned change.
 - Keep the consultation bounded to the task, relevant files, and diff. Do not send secrets, cookies, tokens, `.env` files, private keys, databases, or unrelated personal data.
-- The wrapper defaults to `Gemini 3.5 Flash (High)` with a 120-second agy print deadline, an 80,000-byte bundle limit, and one transient retry. Repeat `--model` for up to three independent, sequential opinions; use `--print-timeout`, `--max-bytes`, or `--retries` when a different tradeoff is intentional.
-- For example, `--model "Gemini 3.5 Flash (High)" --model "Gemini 3.1 Pro (High)"` returns separately labeled opinions for Codex to compare; it does not ask agy to synthesize a decision.
+- The wrapper defaults to two independent sequential passes: `Gemini 3.1 Pro (High)` and `Gemini 3.5 Flash (High)`. It uses a 120-second agy print deadline, an 80,000-byte bundle limit, and one transient retry per model. Use `--model` to select one or two models, or use `--print-timeout`, `--max-bytes`, or `--retries` when a different tradeoff is intentional.
+- Each pass must return a compact report with at most four findings. The wrapper keeps only the report, finding, uncertainty, and no-finding lines and caps the result before it reaches Codex, so independent review does not expand Codex's context unnecessarily.
 
 ## When to consult
 
@@ -36,7 +36,7 @@ This is an explicit opt-in skill. Do not invoke it implicitly; use it only when 
    ```sh
    codex-agy-consult --phase plan --path src/relevant/module.ts <<'EOF'
    Challenge Codex's current plan for this task. Look for missing consumers, hidden coupling, races, security boundaries, compatibility breaks, and normal/worst-case behavior.
-   Return bounded, evidence-based findings only. If the supplied context is insufficient, say INSUFFICIENT_CONTEXT instead of guessing.
+   Return a compact report with at most four evidence-based findings. If the supplied context is insufficient, say INSUFFICIENT_CONTEXT instead of guessing.
    EOF
    ```
 
@@ -56,7 +56,7 @@ This is an explicit opt-in skill. Do not invoke it implicitly; use it only when 
 
 - Tell agy it is read-only and must review only the supplied task, status, files, and diff.
 - Require an explicit `INSUFFICIENT_CONTEXT` result when the bundle cannot support a claim.
-- Require findings with: severity, file/line or symbol, concrete evidence, impact, normal/worst-case scenario, confidence, and the next verification step.
+- Require the compact `FINDING:` format with severity, FACT/HYPOTHESIS, file/line or symbol, concrete evidence, impact, normal/worst-case scenario, confidence, and the next verification step.
 - Require agy to distinguish observed facts from hypotheses and never claim to have read files, commits, logs, or tools that were not supplied.
 - Prefer a different model family from the active Codex model when the user wants maximum opinion diversity, but keep the default agy account/model unless a choice is requested.
 
