@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -33,6 +34,11 @@ REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max",
 NVIDIA_BASE_URL = "${NVIDIA_BASE_URL}"
 NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 ISOLATED_PROVIDER = "codex-consultants-nvidia"
+DEFAULT_RPM_LIMIT = 39
+RATE_WINDOW_SECONDS = 60.0
+RATE_WINDOW_EPSILON_SECONDS = 0.01
+RATE_STATE_ENV = "CODEX_HERMES_RATE_STATE"
+DEFAULT_RATE_STATE_PATH = Path.home() / ".codex" / "state" / "codex-consultants-hermes-rpm.json"
 MAX_MODELS = 2
 
 
@@ -69,36 +75,44 @@ def resolve_thinking_mode(args: argparse.Namespace) -> str:
     return "disabled" if effort == "none" else DEFAULT_THINKING_MODE
 
 
-def uses_isolated_minimax_route(args: argparse.Namespace, model: str) -> bool:
-    return args.provider.strip().lower() == DEFAULT_PROVIDER and is_minimax_m3(model)
+def uses_isolated_nvidia_route(args: argparse.Namespace, model: str) -> bool:
+    return args.provider.strip().lower() == DEFAULT_PROVIDER
 
 
 def build_isolated_config(model: str, thinking_mode: str) -> dict:
-    """Build the only Hermes config visible to an isolated M3 invocation."""
+    """Build the only Hermes config visible to an isolated NVIDIA invocation."""
+    provider_config = {
+        "api": NVIDIA_BASE_URL,
+        "key_env": "NVIDIA_API_KEY",
+        "default_model": model,
+        "transport": "chat_completions",
+    }
+    if is_minimax_m3(model):
+        provider_config["extra_body"] = {
+            "chat_template_kwargs": {
+                "thinking_mode": thinking_mode,
+            },
+        }
     return {
         "model": {
             "default": model,
             "provider": f"custom:{ISOLATED_PROVIDER}",
         },
+        # One Hermes turn and one app-level attempt make the wrapper's
+        # per-invocation request count bounded for the RPM limiter below.
+        "agent": {
+            "max_turns": 1,
+            "api_max_retries": 0,
+        },
         "providers": {
-            ISOLATED_PROVIDER: {
-                "api": NVIDIA_BASE_URL,
-                "key_env": "NVIDIA_API_KEY",
-                "default_model": model,
-                "transport": "chat_completions",
-                "extra_body": {
-                    "chat_template_kwargs": {
-                        "thinking_mode": thinking_mode,
-                    },
-                },
-            },
+            ISOLATED_PROVIDER: provider_config,
         },
     }
 
 
 def build_command(hermes: str, args: argparse.Namespace, payload: str, model: str) -> list[str]:
     """Build a safe one-shot command without touching the real worktree."""
-    if uses_isolated_minimax_route(args, model):
+    if uses_isolated_nvidia_route(args, model):
         provider = f"custom:{ISOLATED_PROVIDER}"
         isolation_flags = ["--ignore-rules", "--toolsets", "file,terminal"]
     else:
@@ -122,14 +136,129 @@ def configured_hermes_home() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".hermes"
 
 
-@contextmanager
-def isolated_minimax_environment(model: str, thinking_mode: str):
-    """Yield an isolated Hermes environment for MiniMax M3.
+def configured_rate_state_path() -> Path:
+    configured = os.environ.get(RATE_STATE_ENV, "").strip()
+    return Path(configured).expanduser() if configured else DEFAULT_RATE_STATE_PATH
 
-    The temporary profile contains only the provider override needed to send
-    MiniMax's thinking field. The user's .env is exposed as a read-only
-    symlink so Hermes can load the existing credential without copying it into
-    the temporary workspace or placing it in the consultation payload.
+
+def rate_key(args: argparse.Namespace, model: str) -> str:
+    return f"{args.provider.strip().lower()}:{model.strip().lower()}"
+
+
+def recent_rate_slots(timestamps: list[float], now: float) -> list[float]:
+    cutoff = now - RATE_WINDOW_SECONDS
+    recent = []
+    for raw_timestamp in timestamps:
+        try:
+            timestamp = float(raw_timestamp)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(timestamp) and timestamp >= cutoff:
+            recent.append(timestamp)
+    return sorted(recent)
+
+
+def rate_wait_seconds(timestamps: list[float], now: float, rpm_limit: int = DEFAULT_RPM_LIMIT) -> float:
+    recent = recent_rate_slots(timestamps, now)
+    if len(recent) < rpm_limit:
+        return 0.0
+    return max(0.0, recent[-rpm_limit] + RATE_WINDOW_SECONDS + RATE_WINDOW_EPSILON_SECONDS - now)
+
+
+def _read_rate_state(path: Path) -> dict[str, list[float]]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    models = raw.get("models") if isinstance(raw, dict) else None
+    return models if isinstance(models, dict) else {}
+
+
+def _write_rate_state(path: Path, models: dict[str, list[float]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump({"version": 1, "models": models}, stream, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, path)
+    finally:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+
+
+@contextmanager
+def _rate_state_lock(path: Path):
+    try:
+        import fcntl
+    except ImportError as exc:  # pragma: no cover - macOS/Linux provide fcntl
+        raise RuntimeError("the Hermes RPM limiter requires a platform file-locking primitive") from exc
+
+    lock_path = path.with_name(f"{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def acquire_rate_slot(
+    key: str,
+    rpm_limit: int = DEFAULT_RPM_LIMIT,
+    state_path: Path | None = None,
+    *,
+    announce: bool = True,
+) -> None:
+    """Reserve one request slot, shared by concurrent wrapper processes."""
+    path = state_path or configured_rate_state_path()
+    while True:
+        now = time.time()
+        with _rate_state_lock(path):
+            models = _read_rate_state(path)
+            for model_key, timestamps in list(models.items()):
+                if isinstance(timestamps, list):
+                    models[model_key] = recent_rate_slots(timestamps, now)
+                else:
+                    models.pop(model_key, None)
+
+            slots = models.get(key, [])
+            wait = rate_wait_seconds(slots, now, rpm_limit)
+            if wait <= 0:
+                models[key] = recent_rate_slots(slots, now) + [now]
+                _write_rate_state(path, models)
+                return
+            _write_rate_state(path, models)
+
+        if announce:
+            print(
+                f"codex-hermes-consult: NVIDIA rate limit reached for {key}; waiting {wait:.1f}s",
+                file=sys.stderr,
+                flush=True,
+            )
+        time.sleep(min(wait, RATE_WINDOW_SECONDS))
+
+
+@contextmanager
+def isolated_nvidia_environment(model: str, thinking_mode: str):
+    """Yield an isolated Hermes environment for an NVIDIA consultation.
+
+    The temporary profile contains only the provider override needed for the
+    NVIDIA request. MiniMax's thinking field is added when applicable. The
+    user's .env is exposed as a read-only symlink so Hermes can load the
+    existing credential without copying it into the temporary workspace or
+    placing it in the consultation payload.
     """
     with tempfile.TemporaryDirectory(prefix="codex-hermes-home-") as isolated_home:
         isolated_path = Path(isolated_home)
@@ -203,6 +332,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RETRIES,
         help=f"retry transient Hermes failures (default: {DEFAULT_RETRIES}; max: 2)",
     )
+    parser.add_argument(
+        "--rpm-limit",
+        type=int,
+        default=DEFAULT_RPM_LIMIT,
+        help=f"per-model NVIDIA requests per rolling minute (default: {DEFAULT_RPM_LIMIT}; max: {DEFAULT_RPM_LIMIT})",
+    )
     return parser.parse_args()
 
 
@@ -212,6 +347,8 @@ def main() -> int:
         return fail("--max-bytes and --timeout must be positive")
     if args.retries < 0 or args.retries > 2:
         return fail("--retries must be between 0 and 2")
+    if args.rpm_limit < 1 or args.rpm_limit > DEFAULT_RPM_LIMIT:
+        return fail(f"--rpm-limit must be between 1 and {DEFAULT_RPM_LIMIT}")
     if not args.provider.strip():
         return fail("--provider must not be empty")
     try:
@@ -238,9 +375,17 @@ def main() -> int:
     for model in models:
         command = build_command(hermes, args, payload, model)
         thinking_mode = resolve_thinking_mode(args)
-        deadline = time.monotonic() + args.timeout
+        deadline = None
         model_failure = None
         for attempt in range(args.retries + 1):
+            if uses_isolated_nvidia_route(args, model):
+                try:
+                    acquire_rate_slot(rate_key(args, model), args.rpm_limit)
+                except (OSError, RuntimeError) as exc:
+                    model_failure = f"rate limiter unavailable: {exc}"
+                    break
+            if deadline is None:
+                deadline = time.monotonic() + args.timeout
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 model_failure = f"timed out after {args.timeout} seconds"
@@ -248,8 +393,8 @@ def main() -> int:
             try:
                 with tempfile.TemporaryDirectory(prefix="codex-hermes-consult-") as isolated_cwd:
                     COMMON.materialize_selected_files(Path(isolated_cwd), selected)
-                    if uses_isolated_minimax_route(args, model):
-                        with isolated_minimax_environment(model, thinking_mode) as hermes_env:
+                    if uses_isolated_nvidia_route(args, model):
+                        with isolated_nvidia_environment(model, thinking_mode) as hermes_env:
                             result = subprocess.run(
                                 command,
                                 cwd=isolated_cwd,
