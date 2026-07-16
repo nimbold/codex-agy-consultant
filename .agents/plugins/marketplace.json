@@ -1,14 +1,14 @@
 {
-  "name": "codex-agy",
+  "name": "codex-consultants",
   "interface": {
-    "displayName": "Codex Agy"
+    "displayName": "Codex Consultants"
   },
   "plugins": [
     {
-      "name": "codex-agy-consultant",
+      "name": "codex-consultants",
       "source": {
         "source": "local",
-        "path": "./plugins/codex-agy-consultant"
+        "path": "./plugins/codex-consultants"
       },
       "policy": {
         "installation": "AVAILABLE",

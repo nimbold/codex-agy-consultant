@@ -1,78 +1,81 @@
-# Codex Agy Consultant
+# Codex Consultants
 
-Use Google Antigravity CLI (`agy`) as a bounded, read-only second opinion while Codex remains the primary investigator, implementer, tester, and decision-maker.
+Use Agy (Antigravity CLI) or Hermes CLI as bounded, read-only second opinions while Codex remains the primary investigator, implementer, tester, and decision-maker.
 
-`agy` is not bundled. Install it separately, sign in, and keep it on `PATH`.
+The plugin does not bundle either client. Install and authenticate the client you want separately, then keep it on `PATH`. Hermes is configured for NVIDIA NIM with MiniMax M3 by default.
+
+## Codex plugin installation
+
+From a checkout:
+
+```sh
+codex plugin marketplace add /path/to/codex-consultants
+codex plugin add codex-consultants@codex-consultants
+```
+
+After publishing, a GitHub checkout can use:
+
+```sh
+codex plugin marketplace add nimbold/codex-consultants --ref main
+codex plugin add codex-consultants@codex-consultants
+```
+
+Start a new Codex thread after installation so the skills are rediscovered. The plugin does not install, log in to, or configure Agy, Hermes, or NVIDIA.
+
+## Skill commands
+
+Use `/skills` to browse the installed skills, or mention these concise skill names directly:
+
+- `$agy-consult` — bounded Agy second opinion using the existing Gemini configuration.
+- `$hermes-consult` — bounded Hermes second opinion using NVIDIA NIM and `minimaxai/minimax-m3`.
+
+`$agy-consultant` remains available as a compatibility name for existing users. Codex's portable plugin interface uses skills (`$name`); arbitrary `/agy-...` and `/hermes-...` slash commands are not currently a distributable plugin surface. The old local `/prompts:name` mechanism is local-only and deprecated, so it is not used here.
+
+Both skills are explicit-only. They do not run automatically, and Codex must independently verify every actionable suggestion.
 
 ## Manual installation
 
-Clone this repository, then install the global skill and launcher:
+The optional installer adds the concise skills, the legacy Agy skill, and command-line launchers:
 
 ```sh
-git clone https://github.com/OWNER/codex-agy-consultant.git
-cd codex-agy-consultant
+git clone https://github.com/nimbold/codex-consultants.git
+cd codex-consultants
 ./scripts/install.sh --install-guidance
 ```
 
 Use `python3 scripts/install.py` when `install.sh` is unavailable. Add `--force` only when replacing an existing installation; the installer creates timestamped backups. `--install-guidance` is optional and appends a marked, idempotent policy block to `CODEX_HOME/AGENTS.md`.
 
-## Automatic Codex plugin installation
-
-The repository includes a repo-local marketplace entry. From a checkout:
+The launchers are:
 
 ```sh
-codex plugin marketplace add /path/to/codex-agy-consultant
-codex plugin add codex-agy-consultant@codex-agy
+codex-agy-consult
+codex-hermes-consult
 ```
-
-After publishing, the same path can use a GitHub source:
-
-```sh
-codex plugin marketplace add OWNER/codex-agy-consultant --ref main
-codex plugin add codex-agy-consultant@codex-agy
-```
-
-Start a new Codex thread after installation so the skill is rediscovered. Automatic plugin installation does not install `agy` or authenticate a Google account.
-
-Choose one installation path per Codex home. The manual global skill and the marketplace plugin expose the same consultant; installing both can create duplicate autocomplete entries.
 
 ## How it works
 
-Codex first forms its own understanding. The consultant then receives a bounded task bundle containing selected files, safe repository status, and, for diff consultations, relevant tracked hunks. The wrapper preflights the bundle by omitting full lockfiles, oversized full files, and low-priority diff paths with explicit context notes before invoking `agy` in an isolated plan/sandbox session. It never gives agy the repository path, and Codex validates each advisory finding against the live repository before changing anything.
+Codex first forms its own understanding. The selected consultant then receives a bounded task bundle containing the task, safe repository status, selected files, and, for diff consultations, relevant tracked hunks. The shared preflight omits sensitive paths, full lockfiles, oversized files, and low-priority diff paths with explicit context notes.
 
-The wrapper fails closed on sensitive paths, out-of-repository paths, timeouts, empty output, and non-zero `agy` exits. Plan consultations omit the tracked diff and run agy in read-only plan mode. Agy receives only the preflight-selected context files in its isolated temporary workspace, and one transient failure retry is performed within the overall timeout. It does not silently truncate context: every preflight omission is listed for Agy and Codex, and it never edits, commits, or pushes.
+Each wrapper invokes its client from an isolated temporary workspace containing only the selected context files. Agy uses plan/sandbox mode. Hermes uses NVIDIA NIM, MiniMax M3 by default, `--oneshot`, `--safe-mode`, `--ignore-rules`, and `--ignore-user-config`. Neither wrapper gives the client the real repository path or asks it to edit, commit, push, or make the final decision.
 
-The wrapper uses one `Gemini 3.5 Flash (High)` pass, an `80,000`-byte bundle limit, one retry, and a `120s` agy print-mode deadline by default, independent of the interactive model selected in the local agy settings. Repeat `--model` only when a second independent opinion is intentional; for example:
-
-```sh
-codex-agy-consult \
-  --model "Gemini 3.1 Pro (High)" \
-  --model "Gemini 3.5 Flash (High)" \
-  --phase diff \
-  "Review the current diff and report independent material risks."
-```
-
-Each requested model receives the same bounded bundle and its output is labeled separately. Agy must return a compact line-based report with at most four findings; the wrapper removes unstructured narration and caps the report before returning it to Codex. Codex compares and validates the opinions; the wrapper does not ask agy to synthesize a final decision. Override `--print-timeout` when a different latency tradeoff is intentional.
-
-Models run sequentially to avoid a burst of simultaneous requests. If one model times out or fails, successful responses are still returned and the unavailable model is reported; if all requested models fail, the consultation is inconclusive.
-
-For a concise Codex interaction, progress should be limited to a short pre-consultation update and a short result. Bundle construction, safety-limit handling, retry reasoning, prompt contents, and private chain-of-thought should not be narrated. Preflight omissions are handled before the first Agy call; an empty, timed-out, or failed retry ends the consultation unless the user explicitly requests more attempts.
-
-## Invocation policy
-
-The consultant is explicit-only by default. Installing or enabling the plugin makes the skill available, but does not run `agy` automatically. Ask Codex to use `$agy-consultant` or say "consult agy" when you want a second opinion. Codex still performs the complete investigation, implementation, review, and testing, and decides which advice to accept.
+Empty output, timeouts, non-zero exits, and oversized bundles are inconclusive. Reports are compacted to a bounded line-based format with at most four findings. Codex validates the result against the live repository before accepting or rejecting any advice.
 
 ## Development
 
 Run the local checks from the repository root:
 
 ```sh
-python3 -m py_compile plugins/codex-agy-consultant/skills/agy-consultant/scripts/agy_consult.py
+python3 -m py_compile \
+  plugins/codex-consultants/skills/agy-consultant/scripts/agy_consult.py \
+  plugins/codex-consultants/skills/hermes-consult/scripts/hermes_consult.py \
+  scripts/install.py
+python3 scripts/test_consult.py
+python3 scripts/test_hermes_consult.py
 python3 scripts/test_install.py
 ```
 
-The live `agy` smoke test is intentionally opt-in because it requires an authenticated local Antigravity session.
+Live client smoke tests are intentionally opt-in because they require authenticated local Agy or Hermes sessions and may consume provider quota.
 
 ## Privacy
 
-Review bundles may contain source code and are sent to the configured Antigravity service. Do not include credentials, cookies, tokens, private keys, databases, or unrelated private data. Review the current Antigravity terms and data controls before using this with sensitive repositories.
+Review bundles may contain source code and are sent to the configured provider. Do not include credentials, cookies, tokens, private keys, databases, or unrelated private data. Review the current Agy, Hermes, and NVIDIA terms and data controls before using this with sensitive repositories.

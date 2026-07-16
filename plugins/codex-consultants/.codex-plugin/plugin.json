@@ -1,0 +1,32 @@
+{
+  "name": "codex-consultants",
+  "version": "0.1.0+codex.20260716100918",
+  "description": "Use bounded, read-only Agy or Hermes consultations while Codex remains the primary investigator and implementer.",
+  "author": {
+    "name": "Codex Consultants contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "agy",
+    "antigravity",
+    "hermes",
+    "nvidia",
+    "code-review",
+    "adversarial-review"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Consultants",
+    "shortDescription": "Read-only Agy and Hermes opinions for Codex",
+    "longDescription": "Consult Antigravity or Hermes with NVIDIA NIM for bounded adversarial review while Codex independently validates findings, makes changes, and runs tests.",
+    "developerName": "Codex Consultants contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Use Agy or Hermes as a bounded read-only second opinion while Codex remains primary."
+    ]
+  }
+}

@@ -41,19 +41,20 @@ def main() -> int:
             "--install-guidance",
         )
         assert installed.returncode == 0, installed.stderr
+        assert (codex_home / "skills" / "agy-consult" / "SKILL.md").is_file()
         assert (codex_home / "skills" / "agy-consultant" / "SKILL.md").is_file()
+        assert (codex_home / "skills" / "hermes-consult" / "SKILL.md").is_file()
         assert (launcher_dir / "codex-agy-consult").is_file()
-        installed_skill = (codex_home / "skills" / "agy-consultant" / "SKILL.md").read_text(encoding="utf-8")
-        assert "Keep progress concise" in installed_skill
-        assert "one transient retry" in installed_skill
-        assert "80,000-byte bundle limit" in installed_skill
-        assert "temporary workspace containing only the supplied context files" in installed_skill
-        assert "Gemini 3.5 Flash (High)" in installed_skill
-        assert "compact report" in installed_skill
-        assert "preflights" in installed_skill
+        assert (launcher_dir / "codex-hermes-consult").is_file()
+        installed_skill = (codex_home / "skills" / "agy-consult" / "SKILL.md").read_text(encoding="utf-8")
+        hermes_skill = (codex_home / "skills" / "hermes-consult" / "SKILL.md").read_text(encoding="utf-8")
+        assert "Explicit invocation only" in installed_skill
+        assert "$agy-consultant" in installed_skill
+        assert "$hermes-consult" in hermes_skill
+        assert "minimaxai/minimax-m3" in hermes_skill
         guidance = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
-        assert "codex-agy-consultant:start" in guidance
-        assert "explicit opt-in second opinion" in guidance
+        assert "codex-consultants:start" in guidance
+        assert "Agy and Hermes are explicit opt-in second opinions" in guidance
         assert "unless the user explicitly requests" in guidance
 
         refused = run("--codex-home", str(codex_home), "--launcher-dir", str(launcher_dir))
@@ -66,9 +67,11 @@ def main() -> int:
             "--force",
         )
         assert replaced.returncode == 0, replaced.stderr
-        assert list((codex_home / "skill-backups").glob("agy-consultant.backup-*"))
+        assert list((codex_home / "skill-backups").glob("agy-consult.backup-*"))
         assert not list((codex_home / "skills").glob("agy-consultant.backup-*"))
         assert list(launcher_dir.glob("codex-agy-consult.backup-*"))
+        assert list((codex_home / "skill-backups").glob("hermes-consult.backup-*"))
+        assert list(launcher_dir.glob("codex-hermes-consult.backup-*"))
 
     print("installer smoke test: ok")
     return 0

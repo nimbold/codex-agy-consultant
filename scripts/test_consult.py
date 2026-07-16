@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test agy consultation command construction without invoking agy."""
+"""Smoke-test Agy consultation bundle construction without invoking Agy."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins" / "codex-agy-consultant" / "skills" / "agy-consultant" / "scripts" / "agy_consult.py"
+SCRIPT = ROOT / "plugins" / "codex-consultants" / "skills" / "agy-consultant" / "scripts" / "agy_consult.py"
 
 
 def load_module():
