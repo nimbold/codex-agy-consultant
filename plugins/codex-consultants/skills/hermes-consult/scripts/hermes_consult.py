@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -18,10 +20,19 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 AGY_SCRIPT = PLUGIN_ROOT / "skills" / "agy-consult" / "scripts" / "agy_consult.py"
 DEFAULT_MAX_BYTES = 80_000
 DEFAULT_TIMEOUT_SECONDS = 300
-DEFAULT_RETRIES = 1
+# NVIDIA free-tier quotas are request-based; do not spend a second request on
+# a transient failure unless the caller explicitly opts into retries.
+DEFAULT_RETRIES = 0
 RETRY_DELAY_SECONDS = 2.0
 DEFAULT_PROVIDER = "nvidia"
 DEFAULT_MODEL = "minimaxai/minimax-m3"
+DEFAULT_REASONING_EFFORT = "high"
+DEFAULT_THINKING_MODE = "enabled"
+THINKING_MODES = ("enabled", "disabled", "adaptive")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+NVIDIA_BASE_URL = "${NVIDIA_BASE_URL}"
+NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+ISOLATED_PROVIDER = "codex-consultants-nvidia"
 MAX_MODELS = 2
 
 
@@ -43,20 +54,104 @@ def fail(message: str, code: int = 2) -> int:
     return code
 
 
+def is_minimax_m3(model: str) -> bool:
+    """Return True for the MiniMax M3 model id used by NVIDIA NIM."""
+    normalized = model.strip().lower()
+    return normalized == "minimax-m3" or normalized.endswith("/minimax-m3")
+
+
+def resolve_thinking_mode(args: argparse.Namespace) -> str:
+    """Map Hermes' effort vocabulary onto MiniMax M3's three wire modes."""
+    explicit = getattr(args, "thinking_mode", None)
+    if explicit:
+        return explicit
+    effort = (getattr(args, "reasoning_effort", DEFAULT_REASONING_EFFORT) or "").strip().lower()
+    return "disabled" if effort == "none" else DEFAULT_THINKING_MODE
+
+
+def uses_isolated_minimax_route(args: argparse.Namespace, model: str) -> bool:
+    return args.provider.strip().lower() == DEFAULT_PROVIDER and is_minimax_m3(model)
+
+
+def build_isolated_config(model: str, thinking_mode: str) -> dict:
+    """Build the only Hermes config visible to an isolated M3 invocation."""
+    return {
+        "model": {
+            "default": model,
+            "provider": f"custom:{ISOLATED_PROVIDER}",
+        },
+        "providers": {
+            ISOLATED_PROVIDER: {
+                "api": NVIDIA_BASE_URL,
+                "key_env": "NVIDIA_API_KEY",
+                "default_model": model,
+                "transport": "chat_completions",
+                "extra_body": {
+                    "chat_template_kwargs": {
+                        "thinking_mode": thinking_mode,
+                    },
+                },
+            },
+        },
+    }
+
+
 def build_command(hermes: str, args: argparse.Namespace, payload: str, model: str) -> list[str]:
     """Build a safe one-shot command without touching the real worktree."""
+    if uses_isolated_minimax_route(args, model):
+        provider = f"custom:{ISOLATED_PROVIDER}"
+        isolation_flags = ["--ignore-rules", "--toolsets", "file,terminal"]
+    else:
+        provider = args.provider
+        isolation_flags = ["--safe-mode", "--ignore-rules", "--ignore-user-config"]
     return [
         hermes,
         "--oneshot",
+        payload,
         "--provider",
-        args.provider,
+        provider,
         "--model",
         model,
-        "--safe-mode",
-        "--ignore-rules",
-        "--ignore-user-config",
-        payload,
+        *isolation_flags,
     ]
+
+
+def configured_hermes_home() -> Path:
+    """Locate the user's existing Hermes home without reading credentials."""
+    configured = os.environ.get("HERMES_HOME", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".hermes"
+
+
+@contextmanager
+def isolated_minimax_environment(model: str, thinking_mode: str):
+    """Yield an isolated Hermes environment for MiniMax M3.
+
+    The temporary profile contains only the provider override needed to send
+    MiniMax's thinking field. The user's .env is exposed as a read-only
+    symlink so Hermes can load the existing credential without copying it into
+    the temporary workspace or placing it in the consultation payload.
+    """
+    with tempfile.TemporaryDirectory(prefix="codex-hermes-home-") as isolated_home:
+        isolated_path = Path(isolated_home)
+        (isolated_path / "config.yaml").write_text(
+            json.dumps(build_isolated_config(model, thinking_mode), indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        source_env = configured_hermes_home() / ".env"
+        if source_env.is_file():
+            try:
+                (isolated_path / ".env").symlink_to(source_env)
+            except OSError:
+                # Do not copy credentials. The child can still use an exported
+                # NVIDIA_API_KEY, if one is available in its environment.
+                pass
+
+        env = os.environ.copy()
+        env["HERMES_HOME"] = str(isolated_path)
+        env.pop("HERMES_PROFILE", None)
+        env.setdefault("NVIDIA_BASE_URL", NVIDIA_DEFAULT_BASE_URL)
+        yield env
 
 
 def resolve_models(args: argparse.Namespace) -> list[str]:
@@ -88,6 +183,17 @@ def parse_args() -> argparse.Namespace:
         dest="models",
         action="append",
         help=f"Hermes model id; repeat for independent opinions (default: {DEFAULT_MODEL}; max: {MAX_MODELS})",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        default=DEFAULT_REASONING_EFFORT,
+        help="Hermes reasoning level; for MiniMax M3, none disables thinking and all other levels enable it (default: high)",
+    )
+    parser.add_argument(
+        "--thinking-mode",
+        choices=THINKING_MODES,
+        help="MiniMax M3 wire mode; overrides --reasoning-effort (enabled, disabled, or adaptive)",
     )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
@@ -131,6 +237,7 @@ def main() -> int:
     unavailable = []
     for model in models:
         command = build_command(hermes, args, payload, model)
+        thinking_mode = resolve_thinking_mode(args)
         deadline = time.monotonic() + args.timeout
         model_failure = None
         for attempt in range(args.retries + 1):
@@ -141,15 +248,27 @@ def main() -> int:
             try:
                 with tempfile.TemporaryDirectory(prefix="codex-hermes-consult-") as isolated_cwd:
                     COMMON.materialize_selected_files(Path(isolated_cwd), selected)
-                    result = subprocess.run(
-                        command,
-                        cwd=isolated_cwd,
-                        text=True,
-                        capture_output=True,
-                        timeout=remaining,
-                        check=False,
-                        env=os.environ.copy(),
-                    )
+                    if uses_isolated_minimax_route(args, model):
+                        with isolated_minimax_environment(model, thinking_mode) as hermes_env:
+                            result = subprocess.run(
+                                command,
+                                cwd=isolated_cwd,
+                                text=True,
+                                capture_output=True,
+                                timeout=remaining,
+                                check=False,
+                                env=hermes_env,
+                            )
+                    else:
+                        result = subprocess.run(
+                            command,
+                            cwd=isolated_cwd,
+                            text=True,
+                            capture_output=True,
+                            timeout=remaining,
+                            check=False,
+                            env=os.environ.copy(),
+                        )
             except subprocess.TimeoutExpired:
                 model_failure = f"timed out after {args.timeout} seconds"
             except OSError as exc:
